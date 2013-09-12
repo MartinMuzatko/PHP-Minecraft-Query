@@ -1,190 +1,202 @@
 <?php
-class MinecraftQueryException extends Exception
+namespace TYPO3\CMS\Mcserver\Utility;
+
+class MinecraftQueryException extends \Exception
 {
-	// Exception thrown by MinecraftQuery class
+    // Exception thrown by MinecraftQuery class
 }
 
 class MinecraftQuery
 {
-	/*
-	 * Class written by xPaw
+    /*
+     * Originally written by xPaw
+     * Modifications and additions by ivkos
+     * TYPO3-ready Class and Namespace and getInstance Method by MartinMuzatko
+     *
+     * GitHub: https://github.com/MartinMuzatko/Minecraft-Query-for-PHP
+     */
+    
+    const STATISTIC = 0x00;
+    const HANDSHAKE = 0x09;
+    
+    private $socket;
+    private $players;
+    private $info;
+    private $online;
+    private $latencyStart;
+    private $latencyEnd;
+    
+	/**
+	 * Returns a class instance
 	 *
-	 * Website: http://xpaw.ru
-	 * GitHub: https://github.com/xPaw/PHP-Minecraft-Query
+	 * @return \TYPO3\CMS\Mcserver\Utility\MinecraftQuery
 	 */
-	
-	const STATISTIC = 0x00;
-	const HANDSHAKE = 0x09;
-	
-	private $Socket;
-	private $Players;
-	private $Info;
-	
-	public function Connect( $Ip, $Port = 25565, $Timeout = 3 )
-	{
-		if( !is_int( $Timeout ) || $Timeout < 0 )
-		{
-			throw new InvalidArgumentException( 'Timeout must be an integer.' );
-		}
-		
-		$this->Socket = @FSockOpen( 'udp://' . $Ip, (int)$Port, $ErrNo, $ErrStr, $Timeout );
-		
-		if( $ErrNo || $this->Socket === false )
-		{
-			throw new MinecraftQueryException( 'Could not create socket: ' . $ErrStr );
-		}
-		
-		Stream_Set_Timeout( $this->Socket, $Timeout );
-		Stream_Set_Blocking( $this->Socket, true );
-		
-		try
-		{
-			$Challenge = $this->GetChallenge( );
-			
-			$this->GetStatus( $Challenge );
-		}
-		// We catch this because we want to close the socket, not very elegant
-		catch( MinecraftQueryException $e )
-		{
-			FClose( $this->Socket );
-			
-			throw new MinecraftQueryException( $e->getMessage( ) );
-		}
-		
-		FClose( $this->Socket );
+	static public function getInstance() {
+		return \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance('TYPO3\CMS\Mcserver\Utility\MinecraftQuery');
 	}
-	
-	public function GetInfo( )
-	{
-		return isset( $this->Info ) ? $this->Info : false;
-	}
-	
-	public function GetPlayers( )
-	{
-		return isset( $this->Players ) ? $this->Players : false;
-	}
-	
-	private function GetChallenge( )
-	{
-		$Data = $this->WriteData( self :: HANDSHAKE );
-		
-		if( $Data === false )
-		{
-			throw new MinecraftQueryException( 'Failed to receive challenge.' );
-		}
-		
-		return Pack( 'N', $Data );
-	}
-	
-	private function GetStatus( $Challenge )
-	{
-		$Data = $this->WriteData( self :: STATISTIC, $Challenge . Pack( 'c*', 0x00, 0x00, 0x00, 0x00 ) );
-		
-		if( !$Data )
-		{
-			throw new MinecraftQueryException( 'Failed to receive status.' );
-		}
-		
-		$Last = '';
-		$Info = Array( );
-		
-		$Data    = SubStr( $Data, 11 ); // splitnum + 2 int
-		$Data    = Explode( "\x00\x00\x01player_\x00\x00", $Data );
-		
-		if( Count( $Data ) !== 2 )
-		{
-			throw new MinecraftQueryException( 'Failed to parse server\'s response.' );
-		}
-		
-		$Players = SubStr( $Data[ 1 ], 0, -2 );
-		$Data    = Explode( "\x00", $Data[ 0 ] );
-		
-		// Array with known keys in order to validate the result
-		// It can happen that server sends custom strings containing bad things (who can know!)
-		$Keys = Array(
-			'hostname'   => 'HostName',
-			'gametype'   => 'GameType',
-			'version'    => 'Version',
-			'plugins'    => 'Plugins',
-			'map'        => 'Map',
-			'numplayers' => 'Players',
-			'maxplayers' => 'MaxPlayers',
-			'hostport'   => 'HostPort',
-			'hostip'     => 'HostIp'
-		);
-		
-		foreach( $Data as $Key => $Value )
-		{
-			if( ~$Key & 1 )
-			{
-				if( !Array_Key_Exists( $Value, $Keys ) )
-				{
-					$Last = false;
-					continue;
-				}
-				
-				$Last = $Keys[ $Value ];
-				$Info[ $Last ] = '';
-			}
-			else if( $Last != false )
-			{
-				$Info[ $Last ] = $Value;
-			}
-		}
-		
-		// Ints
-		$Info[ 'Players' ]    = IntVal( $Info[ 'Players' ] );
-		$Info[ 'MaxPlayers' ] = IntVal( $Info[ 'MaxPlayers' ] );
-		$Info[ 'HostPort' ]   = IntVal( $Info[ 'HostPort' ] );
-		
-		// Parse "plugins", if any
-		if( $Info[ 'Plugins' ] )
-		{
-			$Data = Explode( ": ", $Info[ 'Plugins' ], 2 );
-			
-			$Info[ 'RawPlugins' ] = $Info[ 'Plugins' ];
-			$Info[ 'Software' ]   = $Data[ 0 ];
-			
-			if( Count( $Data ) == 2 )
-			{
-				$Info[ 'Plugins' ] = Explode( "; ", $Data[ 1 ] );
-			}
-		}
-		else
-		{
-			$Info[ 'Software' ] = 'Vanilla';
-		}
-		
-		$this->Info = $Info;
-		
-		if( $Players )
-		{
-			$this->Players = Explode( "\x00", $Players );
-		}
-	}
-	
-	private function WriteData( $Command, $Append = "" )
-	{
-		$Command = Pack( 'c*', 0xFE, 0xFD, $Command, 0x01, 0x02, 0x03, 0x04 ) . $Append;
-		$Length  = StrLen( $Command );
-		
-		if( $Length !== FWrite( $this->Socket, $Command, $Length ) )
-		{
-			throw new MinecraftQueryException( "Failed to write on socket." );
-		}
-		
-		$Data = FRead( $this->Socket, 2048 );
-		
-		if( $Data === false )
-		{
-			throw new MinecraftQueryException( "Failed to read from socket." );
-		}
-		
-		if( StrLen( $Data ) < 5 || $Data[ 0 ] != $Command[ 2 ] )
-		{
-			return false;
-		}
-		
-		return SubStr( $Data, 5 );
-	}
+
+    public function connect($IP, $port = 25565, $timeout = 3)
+    {
+        if (!is_int($timeout) || $timeout < 0) {
+            throw new InvalidArgumentException('Timeout must be an integer.');
+        }
+        
+        $this->latencyStart = microtime(true);
+        
+        $this->socket = @fsockopen('udp://' . $IP, (int) $port, $errNo, $errStr, $timeout);
+        
+        if ($errNo || $this->socket === false) {
+            throw new MinecraftQueryException('Could not create socket: ' . $errStr);
+        }
+        
+        stream_set_timeout($this->socket, $timeout);
+        stream_set_blocking($this->socket, true);
+        
+        try {
+            $challenge = $this->getChallenge();
+            
+            $this->getStatus($challenge);
+            $this->online = true;
+        }
+        // We catch this because we want to close the socket, not very elegant
+        catch (minecraftQueryException $e) {
+            fclose($this->socket);
+            $this->online = false;
+            
+            throw new MinecraftQueryException($e->getMessage());
+        }
+        
+        fclose($this->socket);
+    }
+    
+    public function getInfo()
+    {
+        return isset($this->info) ? $this->info : false;
+    }
+    
+    // Kept for compatibility reasons
+    public function getPlayers()
+    {
+        return isset($this->players) ? $this->players : false;
+    }
+
+    // Alias to getPlayers(). Better represents what the function really does.
+    public function getPlayerList()
+    {
+        return isset($this->players) ? $this->players : false;
+    }
+
+    // Added for convenience
+    public function isOnline()
+    {
+        return isset($this->online) ? $this->online : false;
+    }
+    
+    private function getChallenge()
+    {
+        $data = $this->writeData(self::HANDSHAKE);
+        
+        if ($data === false) {
+            throw new MinecraftQueryException("Failed to receive challenge.");
+        }
+        
+        return pack('N', $data);
+    }
+    
+    private function getStatus($challenge)
+    {
+        $data = $this->writeData(self::STATISTIC, $challenge . pack('c*', 0x00, 0x00, 0x00, 0x00));
+        
+        if (!$data) {
+            throw new MinecraftQueryException("Failed to receive status.");
+        }
+        
+        $last = "";
+        $info = array();
+        
+        $data    = substr($data, 11); // splitnum + 2 int
+        $data    = explode("\x00\x00\x01player_\x00\x00", $data);
+        $players = substr($data[1], 0, -2);
+        $data    = explode("\x00", $data[0]);
+        
+        // Array with known keys in order to validate the result
+        // It can happen that server sends custom strings containing bad things (who can know!)
+        $keys = array(
+            'hostname'   => 'HostName',
+            'gametype'   => 'GameType',
+            'version'    => 'Version',
+            'plugins'    => 'Plugins',
+            'map'        => 'Map',
+            'numplayers' => 'Players',
+            'maxplayers' => 'MaxPlayers',
+            'hostport'   => 'HostPort',
+            'hostip'     => 'HostIp'
+        );
+        
+        foreach ($data as $key => $value) {
+            if (~$key & 1) {
+                if (!array_key_exists($value, $keys)) {
+                    $last = false;
+                    continue;
+                }
+                
+                $last        = $keys[$value];
+                $info[$last] = "";
+            } else if ($last != false) {
+                $info[$last] = $value;
+            }
+        }
+        
+        // Ints
+        $info['Players']    = intval($info['Players']);
+        $info['MaxPlayers'] = intval($info['MaxPlayers']);
+        $info['HostPort']   = intval($info['HostPort']);
+        
+        // Parse "plugins", if any
+        if ($info['Plugins']) {
+            $data = explode(": ", $info['Plugins'], 2);
+            
+            $info['RawPlugins'] = $info['Plugins'];
+            $info['Software']   = $data[0];
+            
+            if (count($data) == 2) {
+                $info['Plugins'] = explode("; ", $data[1]);
+            }
+        } else {
+            $info['Software'] = 'Vanilla';
+        }
+        
+        // (float) Returns approximate server latency in milliseconds
+        $this->latencyEnd = microtime(true);
+        $info['Latency'] = round(($this->latencyEnd - $this->latencyStart) * 1000, 2);
+        
+        $this->info = $info;
+        
+        if ($players) {
+            $this->players = explode("\x00", $players);
+        }
+    }
+    
+    private function writeData($command, $append = "")
+    {
+        $command = pack('c*', 0xFE, 0xFD, $command, 0x01, 0x02, 0x03, 0x04) . $append;
+        $length  = strlen($command);
+        
+        if ($length !== fwrite($this->socket, $command, $length)) {
+            throw new MinecraftQueryException("Failed to write on socket.");
+        }
+        
+        $data = fread($this->socket, 2048);
+        
+        if ($data === false) {
+            throw new MinecraftQueryException("Failed to read from socket.");
+        }
+        
+        if (strlen($data) < 5 || $data[0] != $command[2]) {
+            return false;
+        }
+        
+        return substr($data, 5);
+    }
 }
+?>

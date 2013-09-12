@@ -1,4 +1,4 @@
-# PHP Minecraft Query
+# PHP Minecraft Query - TYPO3 ready
 
 ## Description
 This class was created to query Minecraft servers.<br>
